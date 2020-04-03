@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+
+# folder
+.ipynb_checkpoints
+data/
+bert_base_chinese
