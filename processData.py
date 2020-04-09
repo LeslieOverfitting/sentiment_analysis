@@ -13,24 +13,24 @@ class DataProcessor(object):
     def get_train_feature(self, data_path):
         train_data_df = self.load_data(data_path)
         input_ids_tensor, attention_mask_tensor, token_type_ids_tensor = self.tokenize_data(train_data_df, '微博中文内容')
-        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor, train_data_df['情感倾向'], config)
+        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor, train_data_df['情感倾向'], self.device)
     
     def get_dev_feature(self, data_path):
         dev_data_df = self.load_data(data_path)
         input_ids_tensor, attention_mask_tensor, token_type_ids_tensor = self.tokenize_data(dev_data_df, '微博中文内容')
-        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor, dev_data_df['情感倾向'], config)
+        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor, dev_data_df['情感倾向'], self.device)
 
     def get_test_feature(self, data_path):
-        test_data_df = self.load_data(data_path)
+        test_data_df = self.load_data(data_path, True)
         input_ids_tensor, attention_mask_tensor, token_type_ids_tensor = self.tokenize_data(test_data_df, '微博中文内容')
-        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor)
+        return DataSet(input_ids_tensor, attention_mask_tensor, token_type_ids_tensor, None, self.device), test_data_df
     
     def load_data(self, data_path, is_test=False):
         df = pd.read_csv(data_path)
         if is_test:
-            columns = ['微博中文内容', '情感倾向']
+            columns = ['微博id', '微博中文内容']
         else:
-            columns = ['微博id', '情感倾向']
+            columns = ['微博中文内容', '情感倾向']
         df = df[columns]
         return df
 
@@ -49,7 +49,4 @@ class DataProcessor(object):
             input_ids.append(ids)
             attention_mask.append(masks)
             token_type_ids.append(token_type_id)
-        input_ids_tensor = torch.tensor(data=input_ids, device=self.device)
-        attention_mask_tensor = torch.tensor(data=attention_mask, device=self.device)
-        token_type_ids_tensor = torch.tensor(data=token_type_ids, device=self.device)
-        return input_ids_tensor, attention_mask_tensor, token_type_ids_tensor
+        return input_ids, attention_mask, token_type_ids

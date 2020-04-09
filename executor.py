@@ -23,13 +23,14 @@ class ModelExcuter(object):
         optimizer = optim.Adam(model.parameters(), lr=self.config.learn_rate)
         total_batch = 0
         criterion = nn.CrossEntropyLoss()
-        dev_per_batch = 50
-        dev_best_loss = float('inf')
+        dev_per_batch = 500
+        #dev_best_loss = float('inf')
+        f1_score_best = 0
         last_improve = 0
         model.train()
         total_loss = 0
-        for epoch in range(config.num_epochs):
-            print('epoch [{}/{}]'.format(epoch + 1, config.num_epochs))
+        for epoch in range(self.config.num_epochs):
+            print('epoch [{}/{}]'.format(epoch + 1, self.config.num_epochs))
             for (inputs, labels) in DataLoader(self.train_tensor_set, batch_size=self.config.batch_size, shuffle=True):
                 total_batch += 1
                 model.zero_grad() 
@@ -42,17 +43,17 @@ class ModelExcuter(object):
                     predicts = torch.max(outputs.data, dim=1)[1].cpu().numpy()
                     train_acc = metrics.accuracy_score(true_labels, predicts)
                     time_dif = get_time_diff(start_time)
-                    dev_acc, dev_loss, report, confusion = self.evaluate(model)
+                    dev_acc, dev_loss, report, confusion, f1_score = self.evaluate(model)
                     model.train()
-                    if dev_best_loss > dev_loss:
-                        dev_best_loss = dev_loss
+                    if f1_score_best < f1_score:
+                        f1_score_best = f1_score
                         improve = '*'
                         torch.save(model.state_dict(), self.config.model_save_path)
                     else:
                         improve = ' '
-                    msg = 'Epoch:{0:>2} Iter: {1:>6},  Train Loss: {2:>5.2},  Train Acc: {3:>6.2%},' \
-                                '  Dev Loss: {4:>5.2},  Dev Acc: {5:>6.2%},  Time: {6} {7}'
-                    print(msg.format(epoch, total_batch, loss.item(), train_acc, dev_loss, dev_acc, time_dif, improve))
+                    msg = 'Epoch:{0:>2} Iter: {1:>6}, Train Loss: {2:>5.2}, Train Acc: {3:>6.3%},' \
+                                ' Dev Loss: {4:>5.2}, Dev Acc: {5:>6.3%}, f1_score: {6:>8.7}, Time: {7} {8}'
+                    print(msg.format(epoch + 1, total_batch, loss.item(), train_acc, dev_loss, dev_acc,  f1_score, time_dif, improve))
         self.evaluate_model(model)
 
 
@@ -66,7 +67,7 @@ class ModelExcuter(object):
         criterion = nn.CrossEntropyLoss()
         loss_total = 0
         with torch.no_grad():
-            for (inputs, labels) in DataLoader(dataset=self.dev_dataset, batch_size=self.config.batch_size, shuffle=False):
+            for (inputs, labels) in DataLoader(dataset=self.dev_tensor_set, batch_size=self.config.batch_size, shuffle=False):
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
                 loss_total += loss.item()
@@ -75,9 +76,10 @@ class ModelExcuter(object):
                 predicts_all = np.append(predicts_all, predicts)
                 labels_all = np.append(labels_all, labels)
         acc = metrics.accuracy_score(labels_all, predicts_all)
+        f1_score = metrics.f1_score(labels_all, predicts_all, average='macro')  
         report = metrics.classification_report(labels_all, predicts_all, digits=4)
         confusion = metrics.confusion_matrix(labels_all, predicts_all)
-        return acc, loss_total / len(self.dev_dataset) * self.config.batch_size, report, confusion
+        return acc, loss_total / len(self.dev_tensor_set) * self.config.batch_size, report, confusion, f1_score
 
     def predict(self, model, test_dataset, ids, coef=None):
         model.load_state_dict(torch.load(self.config.model_save_path))
@@ -87,7 +89,7 @@ class ModelExcuter(object):
             coef = [1.0, 1.0, 1.0]
         torch_coef = torch.tensor(coef, device=self.config.device).view(-1, 3)
         predicts_all = []
-        for inputs,_ in tqdm(DataLoader(dataset=test_dataset, batch_size=self.config.batch_size, shuffle=False)):
+        for inputs,_ in tqdm(DataLoader(dataset=TensorDataset(test_dataset.dataset, test_dataset.labels), batch_size=self.config.batch_size, shuffle=False)):
             outputs = model(inputs)
             outputs = F.softmax(outputs, dim=1)
             outputs = outputs * torch_coef
@@ -106,7 +108,8 @@ class ModelExcuter(object):
         print("finish !")
 
     def evaluate_model(self, model):
-        dev_acc, dev_loss, dev_report, dev_confusion = self.evaluate(model, True)
+        start_time = time.time()
+        dev_acc, dev_loss, dev_report, dev_confusion, f1_score = self.evaluate(model, True)
         print('未使用指标优化')
         msg = "Test Loss:{0:>5.2}, Test Acc:{1:>6.2%}"
         print(msg.format(dev_loss, dev_acc))

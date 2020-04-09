@@ -3,5 +3,4 @@ __pycache__/
 
 # folder
 .ipynb_checkpoints
-data/
-bert_base_chinese
+
