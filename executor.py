@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from optimizedRounder import OptimizedRounder
+from transformers import get_linear_schedule_with_warmup, AdamW
+from model.adversal import FGM
 
 class ModelExcuter(object):
     def __init__(self, train_dataset, dev_dataset, config):
@@ -18,26 +20,53 @@ class ModelExcuter(object):
         self.dev_tensor_set = TensorDataset(dev_dataset.dataset, dev_dataset.labels)
         self.config = config
 
-    def train(self, model):
+    def train(self, model, use_weight=False):
         start_time = time.time()
-        optimizer = optim.Adam(model.parameters(), lr=self.config.learn_rate)
+        train_loader = DataLoader(self.train_tensor_set, batch_size=self.config.batch_size, shuffle=True)
+        t_total = len(train_loader) * self.config.num_epochs
+        # Prepare optimizer and schedule (linear warmup and decay)
+        no_decay = ['bias', 'LayerNorm.weight']
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            'weight_decay': self.config.weight_decay},
+            {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        ]
+        warmup_steps = int(t_total * 0.1)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=self.config.learn_rate, eps=1e-8)
+        scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                num_training_steps=t_total)
         total_batch = 0
-        criterion = nn.CrossEntropyLoss()
+        if use_weight:
+            weight= torch.tensor([2, 1, 1.5], dtype=torch.float).to(self.config.device)
+            criterion = nn.CrossEntropyLoss(weight=weight)
+        else:
+            criterion = nn.CrossEntropyLoss()
         dev_per_batch = 500
         #dev_best_loss = float('inf')
         f1_score_best = 0
         last_improve = 0
         model.train()
         total_loss = 0
+        if self.config.adv_type == 'fgm':
+            fgm = FGM(model)
         for epoch in range(self.config.num_epochs):
             print('epoch [{}/{}]'.format(epoch + 1, self.config.num_epochs))
-            for (inputs, labels) in DataLoader(self.train_tensor_set, batch_size=self.config.batch_size, shuffle=True):
+            for (inputs, labels) in train_loader:
                 total_batch += 1
                 model.zero_grad() 
                 outputs = model(inputs)
                 loss = criterion(outputs, labels)
                 loss.backward()
+                # 对抗
+                if self.config.adv_type == 'fgm':
+                    fgm.attack()  ##对抗训练
+                    adv_outputs = model(inputs)
+                    loss_adv = criterion(adv_outputs, labels)
+                    loss_adv.backward()
+                    fgm.restore()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
                 optimizer.step()
+                scheduler.step()  # Update learning rate schedule
                 if total_batch % dev_per_batch == 0:
                     true_labels = labels.data.cpu()
                     predicts = torch.max(outputs.data, dim=1)[1].cpu().numpy()
@@ -49,8 +78,14 @@ class ModelExcuter(object):
                         f1_score_best = f1_score
                         improve = '*'
                         torch.save(model.state_dict(), self.config.model_save_path)
+                        torch.save(model.state_dict(), 'saveModel/temp')
                     else:
                         improve = ' '
+                        if f1_score_best - 0.012 > f1_score:
+                            improve = '-'
+                            model.load_state_dict(torch.load('saveModel/temp'))
+                        else:
+                            torch.save(model.state_dict(), 'saveModel/temp')
                     msg = 'Epoch:{0:>2} Iter: {1:>6}, Train Loss: {2:>5.2}, Train Acc: {3:>6.3%},' \
                                 ' Dev Loss: {4:>5.2}, Dev Acc: {5:>6.3%}, f1_score: {6:>8.7}, Time: {7} {8}'
                     print(msg.format(epoch + 1, total_batch, loss.item(), train_acc, dev_loss, dev_acc,  f1_score, time_dif, improve))
@@ -58,12 +93,17 @@ class ModelExcuter(object):
 
 
 
-    def evaluate(self, model, flag=False):
+    def evaluate(self, model, flag=False, use_weight=False):
         if flag:
             model.load_state_dict(torch.load(self.config.model_save_path))
         model.eval()
         labels_all = np.array([], dtype=int)
         predicts_all = np.array([], dtype=int)
+        if use_weight:
+            weight= torch.tensor([2, 1, 1.5], dtype=torch.float).to(self.config.device)
+            criterion = nn.CrossEntropyLoss(weight=weight)
+        else:
+            criterion = nn.CrossEntropyLoss()
         criterion = nn.CrossEntropyLoss()
         loss_total = 0
         with torch.no_grad():
