@@ -1,14 +1,18 @@
 import torch
+from torch.utils.data import Dataset
 
-class DataSet(object):
-    def __init__(self, input_ids, input_masks, token_type_ids, labels, device):
+class BertDataSet(Dataset):
+    def __init__(self, input_ids, input_masks, token_type_ids, labels=None, device='cpu'):
         super().__init__()
-        self.dataset = None
-        self.build_input(input_ids, input_masks, token_type_ids, device)
-        if labels is None:
-            self.labels = torch.rand(self.dataset.size()[0], device=device)
-        else:
-            self.labels = torch.tensor(labels.astype(int) + 1, dtype=torch.long, device=device)
-        
-    def build_input(self, input_ids, input_masks, token_type_ids, device):
-        self.dataset = torch.tensor(data=[input_ids, input_masks, token_type_ids], device=device).permute(1, 0, 2)
+        self.input_ids = input_ids
+        self.input_masks = input_masks
+        self.token_type_ids = token_type_ids
+        self.labels = labels
+   
+    def __len__(self):
+        return len(self.input_ids)
+
+    def __getitem__(self, idx):
+        if self.labels is None:
+            return self.input_ids[idx], self.input_masks[idx], self.token_type_ids[idx]
+        return self.input_ids[idx], self.input_masks[idx], self.token_type_ids[idx], self.labels[idx]
